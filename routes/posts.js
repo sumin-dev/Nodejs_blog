@@ -1,105 +1,176 @@
 const express = require('express');
-const Posts = require("../schemas/post");
-const moment = require("moment");
 const router = express.Router();
+const { Post, Like } = require("../models"); //index 생략가능
+const authMiddleware = require("../middlewares/auth-middleware")
 
 //게시글 조회
 router.get("/posts", async (req, res) => {
-  
-  const Except = { //키이름: false를 적으면 find 함수에서 제외하고 db 불러옴
-    __v: false,
-    password: false,
-    content: false,
-  };
- 
-    const posts = await Posts.find({}, Except).sort({createdAt: -1}); //작성날짜 내림차순 정렬
-  
-
-    res.json({
-      data: posts
-
-    });
+  let final_posts = [];
+  const posts = await Post.findAll({
+    attributes: { exclude: ['content'] },
+    order: [['createdAt', 'DESC']]
   });
+
+  for (let i = 0; i < posts.length; i++) {
+    const id = posts[i].dataValues.postId
+    const likes = await Like.findAll({where: {postId: id}, raw: true});
+    final_posts.push({post:posts[i], likes:likes.length})
+  
+  };
+
+  res.json({
+    data: final_posts
+
+  });
+});
 
 //게시글 상세 조회
-  router.get("/posts/:postId", async (req, res) => {
-    const { postId } = req.params;
+router.get("/posts/:postId", async (req, res) => {
+  const { postId } = req.params;
+  let final_posts = [];
+  const posts = await Post.findByPk(postId);
+  const likes = await Like.findAll({where: {postId}});
+  
+  final_posts.push({post:posts, likes:likes.length})
+  
 
-    const Except = { //키이름: false를 적으면 find 함수에서 제외하고 db 불러옴
-      __v: false,
-      password: false,
-    };
+  if (!posts) {
+    res.status(404).send({ "message": "게시글이 존재하지 않습니다." });
+  } else {
+    res.send({ final_posts });
+  }
 
-    const [detail] = await Posts.find({ _id: postId }, Except)
-  
-    res.json({
-      detail,
-    });
-  
-  
-  });
+
+});
 
 //게시글 삭제 
-router.delete("/posts/:postId", async (req, res) => {
-    const { postId } = req.params;
-    const { password } = req.body;
+router.delete("/posts/:postId", authMiddleware, async (req, res) => {
+  const { userId } = res.locals.user;
+  const { postId } = req.params;
 
-    const existsPosts = await Posts.findById({ _id: postId });
+  const existsPosts = await Post.findOne({
+    where: {
+      userId,
+      postId,
+    },
+  });
 
+  if (existsPosts) {
+    await existsPosts.destroy();
+    res.send({ "message": "게시글을 삭제하였습니다." });
+  } else {
+    res.status(404).send({ "message": "삭제할 게시글이 없습니다." });
+  }
 
-    if (existsPosts.password === password) {
-      await Posts.deleteOne({ _id: postId });
-      res.send ({ "message": "게시글을 삭제하였습니다."})
-    } else {
-      res.status(400).json({ success: false, errorMessage: "비밀번호를 확인해주세요."});
-    }
-  }); 
+});
 
 //게시글 수정
-router.put("/posts/:postId", async (req,res) => {
-    const { postId } = req.params;
-    const { password } = req.body;
-    const { title } = req.body;
-    const { content } = req.body;
-  
-  
-    const existsPosts = await Posts.findById({ _id: postId });
+router.put("/posts/:postId", authMiddleware, async (req, res) => {
+  const { postId } = req.params;
+  const { userId } = res.locals.user;
+  const { title, content } = req.body;
 
-    if (existsPosts.password === password) {
-      await Posts.updateOne({ postId }, { $set: { title, content }})
-      res.send ({ "message": "게시글을 수정하였습니다."})
-    } else {
-      res.status(400).json({ success: false, errorMessage: "비밀번호를 확인해주세요."});
-    }
-  })  
- 
+  const existsPosts = await Post.findOne({
+    where: {
+      userId,
+      postId,
+    },
+  });
+
+  if (existsPosts) {
+    existsPosts.title = title;
+    existsPosts.content = content;
+    await existsPosts.save();
+    res.send({ "message": "게시글을 수정하였습니다." })
+  } else {
+    res.status(404).send({ "message": "수정할 게시글이 없습니다." });
+  }
+})
+
 //게시글 작성  
-router.post("/posts", async (req, res) => {
-    const { user, password, title, content } = req.body;
+router.post("/posts", authMiddleware, async (req, res) => {
+  const { userId, nickname } = res.locals.user;
+  const { title, content } = req.body;
 
-    // const { _id } = req.params;
-    // const posts = await data.find({ postId: _id });
-    // if (posts.length) {
-    //   return res.status(400).json({ success: false, errorMessage: "이미 있는 데이터입니다." });
-    // }
 
-    // const now = new Date();
-    // const year = now.getFullYear();
-    // const month = now.getMonth();
-    // const date = now.getDate();
-    // const hours = now.getHours();
-    // const minutes = now.getMinutes();
-    // const seconds = now.getSeconds();
-    // const createdAt = year+"-"+month+"-"+date+"T"+hours+":"+minutes+":"+seconds
-    
-    const createdAt = moment().format("YYYY-MM-DD HH:mm:ss")
-    const createPosts = await Posts.create({ user, password, title, content, createdAt })
+  await Post.create({ userId, nickname, title, content });
 
+
+  res.json({
+    "message": "게시글을 생성하였습니다."
+  });
+});
+
+
+//게시글 좋아요 등록, 취소
+router.put("/posts/:postId/like", authMiddleware, async (req, res) => {
+  const { postId } = req.params;
+  const { userId } = res.locals.user;
+  const likes = 1
+
+  const existsPosts = await Post.findByPk(postId);
+  if (!existsPosts) {
+    res.status(404).send({ "message": "게시글이 존재하지 않습니다." });
+    return;
+  }
+
+  try {
+    const existsLikes = await Like.findOne({
+      where: {
+        userId,
+        postId,
+      },
+    });
+
+    if (!existsLikes) {
+      await Like.create({ userId, postId, likes });
+      res.send({ "message": "게시글의 좋아요를 등록하였습니다." });
+    } else {
+      await existsLikes.destroy();
+      res.send({ "message": "게시글의 좋아요를 취소하였습니다." });
+    }
+
+  } catch (err) {
+    return res.status(400).send(err)
+  }
+
+});
+
+//좋아요 게시글 조회
+router.get("/posts/like/me", authMiddleware, async (req, res) => {
+  const { userId } = res.locals.user;
+
+  const existsLikes = await Like.findAll({ where: { userId } });
+  if (!existsLikes) {
+    res.status(200).send({ "message": "좋아요를 등록한 게시글이 없습니다." });
+    return;
+  }
+
+  try {
   
-    res.json({ 
-      // data: createPosts,
-      "message": "게시글을 생성하였습니다."
-     });
-  });  
+    let final_posts = [];
+    for (let i = 0; i < existsLikes.length; i++) {
+      const i_postId = existsLikes[i].dataValues.postId
+      const posts = await Post.findOne({
+        where: {postId: i_postId}, raw: true
+      });
+      const likes = await Like.findAll({
+        where: {postId: i_postId}, raw: true
+      });
+
+      final_posts.push({post:posts, likes:likes.length})
+
+    }
+    final_posts.sort(function (a,b) {return b.likes - a.likes})
+    return res.status(200).send({final_posts})
+
+  } catch (err) {
+    return res.status(400).send(err)
+  }
+
+});
+
 
 module.exports = router;
+
+
